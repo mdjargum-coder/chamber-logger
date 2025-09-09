@@ -16,9 +16,19 @@ def git_push(file_path, message=None):
         os.environ["GIT_SSH_COMMAND"] = f"ssh -i {ssh_path} -o StrictHostKeyChecking=no"
 
     try:
+        # Set Git identity
+        subprocess.run(["git", "config", "user.name", "ReplitUser"], check=True)
+        subprocess.run(["git", "config", "user.email", "replit@example.com"], check=True)
+
+        # Stage file
         subprocess.run(["git", "add", file_path], check=True)
+
+        # Commit
         subprocess.run(["git", "commit", "-m", message], check=True)
+
+        # Push
         subprocess.run(["git", "push", "origin", "master"], check=True)
+
         print(f"✅ Log {file_path} berhasil dipush ke GitHub")
     except subprocess.CalledProcessError as e:
         print("⚠️ Git push gagal:", e)
