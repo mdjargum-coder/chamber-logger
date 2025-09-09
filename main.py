@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine, Base, get_db
@@ -30,11 +30,11 @@ def status(db: Session = Depends(get_db)):
 
 # Endpoint archives → daftar file CSV
 @app.get("/archives")
-def list_archives():
+def list_archives(request: Request):
     files = sorted(os.listdir(ARCHIVE_FOLDER))
     return {
         "archives": [
-            f"http://127.0.0.1:8000/download/{fname}"
+            f"{str(request.base_url).rstrip('/')}/download/{fname}"
             for fname in files if fname.endswith(".csv")
         ]
     }
