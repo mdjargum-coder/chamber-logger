@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 
 from database import SessionLocal
 from models import ChamberLog
+from git_push import git_push
 
 # ===== CONFIG =====
 BROKER = "broker.hivemq.com"
@@ -85,6 +86,8 @@ def archive_session_to_csv(start_time, end_time):
                 })
 
         print(f"ðﾟﾓﾁ Archived session → {file_path}")
+        # 🔥 Push otomatis ke GitHub
+        git_push(file_path)
         return file_path
     finally:
         db.close()
