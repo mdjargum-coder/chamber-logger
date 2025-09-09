@@ -3,3 +3,8 @@ uvicorn
 sqlalchemy
 paho-mqtt
 python-multipart
+fastapi
+paho-mqtt
+python-multipart
+sqlalchemy
+uvicorn
