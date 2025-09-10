@@ -6,30 +6,28 @@ def git_push(file_path, message=None):
     if not message:
         message = f"Add log {os.path.basename(file_path)} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
-    ssh_key = os.environ.get("SSH_PRIVATE_KEY")
-    git_env = os.environ.copy()
-
-    if ssh_key:
-        ssh_path = "/tmp/id_ed25519"
-        with open(ssh_path, "w") as f:
-            f.write(ssh_key)
-        os.chmod(ssh_path, 0o600)
-        git_env["GIT_SSH_COMMAND"] = f"ssh -i {ssh_path} -o StrictHostKeyChecking=no"
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        print("⚠️ GITHUB_TOKEN tidak ditemukan di environment. Log tetap tersimpan lokal.")
+        return
 
     try:
-        # Set Git identity
-        subprocess.run(["git", "config", "user.name", "mdjargum-coder"], check=True, env=git_env)
-        subprocess.run(["git", "config", "user.email", "mdjargum@gmail.com"], check=True, env=git_env)
+        # Konfigurasi user Git (bot account saja, tidak pakai email pribadi)
+        subprocess.run(["git", "config", "user.name", "chamber-logger-bot"], check=True)
+        subprocess.run(["git", "config", "user.email", "bot@chamber-logger.local"], check=True)
 
         # Stage file
-        subprocess.run(["git", "add", file_path], check=True, env=git_env)
+        subprocess.run(["git", "add", file_path], check=True)
 
-        # Commit
-        subprocess.run(["git", "commit", "-m", message], check=True, env=git_env)
+        # Commit (jika ada perubahan)
+        subprocess.run(["git", "commit", "-m", message], check=True)
 
-        # Push
-        subprocess.run(["git", "push", "origin", "master"], check=True, env=git_env)
+        # Push dengan token
+        repo_url = f"https://{token}@github.com/mdjargum-coder/chamber-logger.git"
+        subprocess.run(["git", "push", repo_url, "master"], check=True)
 
         print(f"✅ Log {file_path} berhasil dipush ke GitHub")
     except subprocess.CalledProcessError as e:
-        print("⚠️ Git push gagal:", e)
+        print(f"⚠️ Git push gagal: {e}. Log tetap tersimpan di lokal.")
+    except Exception as e:
+        print(f"❌ Error tidak terduga: {e}. Log tetap tersimpan di lokal.")
