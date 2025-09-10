@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine, Base, get_db
 from models import ChamberLog
@@ -9,6 +10,14 @@ import os
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # atau domain frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ARCHIVE_FOLDER = "archives"
 os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
