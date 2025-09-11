@@ -41,9 +41,13 @@ def status(db: Session = Depends(get_db)):
 @app.get("/archives")
 def list_archives(request: Request):
     files = sorted(os.listdir(ARCHIVE_FOLDER))
+
+    # paksa base_url selalu HTTPS
+    base_url = str(request.base_url).replace("http://", "https://").rstrip("/")
+
     return {
         "archives": [
-            f"{str(request.base_url).rstrip('/')}/download/{fname}"
+            f"{base_url}/download/{fname}"
             for fname in files if fname.endswith(".csv")
         ]
     }
