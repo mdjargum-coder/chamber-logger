@@ -61,6 +61,7 @@ def download_csv(filename: str):
     return {"error": "File not found"}
 
 @app.get("/ping")
+@app.head("/ping")
 def ping():
     return {"status": "ok"}
 
