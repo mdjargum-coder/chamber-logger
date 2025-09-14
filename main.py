@@ -59,3 +59,8 @@ def download_csv(filename: str):
     if os.path.exists(file_path):
         return FileResponse(file_path, media_type="text/csv", filename=filename)
     return {"error": "File not found"}
+
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
+
