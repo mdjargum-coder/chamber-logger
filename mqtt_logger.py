@@ -8,161 +8,144 @@ from datetime import datetime, timezone, timedelta
 from database import SessionLocal
 from models import ChamberLog
 from git_push import git_push
-from main import start_keep_alive, stop_keep_alive   # 🔥 import fungsi keep-alive
+from main import start_keep_alive, stop_keep_alive   # 🔥 import fungsi kontrol keep-alive
 
 # ===== CONFIG =====
 BROKER = "broker.hivemq.com"
 PORT = 1883
 TOPIC = "chamber/log"
-LOG_INTERVAL = 60      # tulis log tiap 1 menit
-TIMEOUT_OFF = 60       # 1 menit tanpa data = chamber OFF
-ARCHIVE_FOLDER = os.path.join(os.path.dirname(__file__), "archives")
-TIMEZONE_OFFSET = 7    # WIB = UTC+7
+LOG_INTERVAL = 60          # tulis log tiap 1 menit
+TIMEOUT_OFF = 180          # kalau 3 menit tidak ada data → OFF
+WIB = timezone(timedelta(hours=7))
 
-# ===== VARIABEL =====
-latest_data = None
+# ===== STATE =====
 last_data_time = None
-last_write_time = time.time()
-chamber_on = False
+last_log_time = None
 session_start_time = None
+chamber_on = False
 chamber_off_notified = False
 new_data_received = False
 
-# Pastikan folder archives ada
-os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
+# ===== FOLDER LOG =====
+if not os.path.exists("logs"):
+    os.makedirs("logs")
 
-# WIB timezone
-WIB = timezone(timedelta(hours=TIMEZONE_OFFSET))
 
-# ===== CALLBACKS =====
-def on_connect(client, userdata, flags, rc):
-    print("Connected with result code", rc)
-    client.subscribe(TOPIC)
-
-def on_message(client, userdata, msg):
-    global latest_data, last_data_time, new_data_received
-    try:
-        payload = json.loads(msg.payload.decode())
-        latest_data = payload
-        last_data_time = time.time()
-        new_data_received = True   # data baru datang
-    except Exception as e:
-        print("Error parsing message:", e)
-
-# ===== ARCHIVE FUNCTION =====
 def archive_session_to_csv(start_time, end_time):
-    if not start_time or not end_time:
-        return None
+    """Export data session ke CSV & push ke Git."""
+    filename = f"logs/session_{start_time.strftime('%Y%m%d_%H%M%S')}_to_{end_time.strftime('%Y%m%d_%H%M%S')}.csv"
 
     db = SessionLocal()
+    logs = db.query(ChamberLog).filter(
+        ChamberLog.timestamp >= start_time,
+        ChamberLog.timestamp <= end_time
+    ).all()
+    db.close()
+
+    if not logs:
+        return None
+
+    with open(filename, mode="w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestamp", "humidity1", "temperature1", "humidity2", "temperature2"])
+        for log in logs:
+            writer.writerow([log.timestamp, log.humidity1, log.temperature1, log.humidity2, log.temperature2])
+
+    git_push(filename)
+    print(f"📁 Session archived to {filename}")
+    return filename
+
+
+def on_connect(client, userdata, flags, rc):
+    print("Connected with result code " + str(rc))
+    client.subscribe(TOPIC)
+
+
+def on_message(client, userdata, msg):
+    global last_data_time, last_log_time, chamber_on, session_start_time
+    global chamber_off_notified, new_data_received
+
     try:
-        logs = db.query(ChamberLog).filter(
-            ChamberLog.created_at >= start_time,
-            ChamberLog.created_at <= end_time
-        ).all()
+        data = json.loads(msg.payload.decode())
+        humidity1 = data.get("humidity1")
+        temperature1 = data.get("temperature1")
+        humidity2 = data.get("humidity2")
+        temperature2 = data.get("temperature2")
+        now = datetime.now(WIB)
 
-        if not logs:
-            print("⚠️ No logs found for this session")
-            return None
+        last_data_time = datetime.now(timezone.utc)
+        new_data_received = True
 
-        file_name = f"session_{start_time.strftime('%Y-%m-%d_%H-%M-%S')}.csv"
-        file_path = os.path.join(ARCHIVE_FOLDER, file_name)
+        if last_log_time is None or (now - last_log_time).total_seconds() >= LOG_INTERVAL:
+            db = SessionLocal()
+            log = ChamberLog(
+                timestamp=now,
+                humidity1=humidity1,
+                temperature1=temperature1,
+                humidity2=humidity2,
+                temperature2=temperature2
+            )
+            db.add(log)
+            db.commit()
+            db.close()
 
-        fieldnames = ["id","tanggal","waktu","temperature1","temperature2","humidity1","humidity2","status","created_at"]
-        with open(file_path, "w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for log in logs:
-                writer.writerow({
-                    "id": log.id,
-                    "tanggal": log.tanggal,
-                    "waktu": log.waktu,
-                    "temperature1": log.temperature1,
-                    "temperature2": log.temperature2,
-                    "humidity1": log.humidity1,
-                    "humidity2": log.humidity2,
-                    "status": log.status,
-                    "created_at": log.created_at.strftime("%Y-%m-%d %H:%M:%S")
-                })
+            last_log_time = now
+            print(f"📝 Logged at {now.strftime('%H:%M:%S WIB')} | H1={humidity1}, T1={temperature1}, H2={humidity2}, T2={temperature2}")
 
-        print(f"📦 Archived session → {file_path}")
-        git_push(file_path)  # 🔥 Push otomatis ke GitHub
-        return file_path
-    finally:
-        db.close()
+    except Exception as e:
+        print("Error processing message:", e)
 
-# ===== HELPER (keep-alive control) =====
-def handle_chamber_on():
-    stop_keep_alive()
-    print("✅ Chamber hidup, stop keep-alive")
 
-def handle_chamber_off():
-    start_keep_alive()
-    print("⚠️ Chamber mati, start keep-alive")
+def check_chamber_status():
+    """Pantau status chamber ON/OFF."""
+    global chamber_on, chamber_off_notified, session_start_time, new_data_received, last_data_time
 
-# ===== MQTT CLIENT =====
-client = mqtt.Client(protocol=mqtt.MQTTv311)
-client.on_connect = on_connect
-client.on_message = on_message
-client.connect(BROKER, PORT, 60)
+    now = datetime.now(timezone.utc)
 
-# ===== LOOP =====
-while True:
-    client.loop(timeout=1.0)
-    now = time.time()
-    
-    # Chamber baru ON
+    # Jika ada data baru & chamber sebelumnya OFF → berarti ON
     if new_data_received and not chamber_on:
         chamber_on = True
         session_start_time = datetime.now(timezone.utc).astimezone(WIB)
         print("✅ Chamber ON - session started")
         chamber_off_notified = False
-        new_data_received = False
-        handle_chamber_on()
+        new_data_received = False   # reset flag
 
-    # Chamber mati
+        # 🔥 Stop keep-alive saat chamber ON
+        stop_keep_alive()
+        print("✅ Chamber hidup, stop keep-alive")
+
+    # Jika chamber ON tapi tidak ada data > TIMEOUT_OFF → berarti OFF
     if chamber_on and last_data_time and now - last_data_time > TIMEOUT_OFF:
         chamber_on = False
         session_end_time = datetime.now(timezone.utc).astimezone(WIB)
-        if not chamber_off_notified:
-            db = SessionLocal()
-            logs = db.query(ChamberLog).filter(
-                ChamberLog.created_at >= session_start_time,
-                ChamberLog.created_at <= session_end_time
-            ).count()
-            db.close()
 
-            if logs > 0:
-                print("⚠️ Chamber OFF - session ended")
-                archive_session_to_csv(session_start_time, session_end_time)
-            else:
-                print("⚠️ Chamber OFF - no logs, skipped archive")
-       
-            chamber_off_notified = True
-            handle_chamber_off()
+        # Simpan ke CSV
+        if session_start_time:
+            archive_session_to_csv(session_start_time, session_end_time)
 
+        chamber_off_notified = True
         session_start_time = None
+        print("⚠️ Chamber OFF - session ended")
 
-    # Simpan data ke DB tiap 1 menit sekali
-    if chamber_on and latest_data and now - last_write_time >= LOG_INTERVAL:
-        db = SessionLocal()
-        try:
-            dt = datetime.now(timezone.utc).astimezone(WIB)
-            log = ChamberLog(
-                tanggal=dt.strftime("%Y-%m-%d"),
-                waktu=dt.strftime("%H:%M:%S"),
-                temperature1=latest_data.get("temperature1"),
-                temperature2=latest_data.get("temperature2"),
-                humidity1=latest_data.get("humidity1"),
-                humidity2=latest_data.get("humidity2"),
-                status="ON",
-                created_at=dt
-            )
-            db.add(log)
-            db.commit()
-            print(f"📝 Logged at {dt.strftime('%H:%M:%S')} WIB | "
-                  f"H1={log.humidity1}, T1={log.temperature1}, "
-                  f"H2={log.humidity2}, T2={log.temperature2}")
-        finally:
-            db.close()
-        last_write_time = now
+        # 🔥 Start keep-alive saat chamber OFF
+        start_keep_alive()
+        print("⚠️ Chamber mati, start keep-alive")
+
+
+def main():
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(BROKER, PORT, 60)
+    client.loop_start()
+
+    try:
+        while True:
+            check_chamber_status()
+            time.sleep(5)
+    except KeyboardInterrupt:
+        client.loop_stop()
+
+
+if __name__ == "__main__":
+    main()
