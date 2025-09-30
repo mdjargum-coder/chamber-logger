@@ -15,7 +15,7 @@ BROKER = "broker.hivemq.com"
 PORT = 1883
 TOPIC = "chamber/log"
 LOG_INTERVAL = 60          # tulis log tiap 1 menit
-TIMEOUT_OFF = 180          # kalau 3 menit tidak ada data → OFF
+TIMEOUT_OFF = 120          # kalau 2 menit tidak ada data → OFF
 WIB = timezone(timedelta(hours=7))
 
 # ===== STATE =====
@@ -149,3 +149,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
