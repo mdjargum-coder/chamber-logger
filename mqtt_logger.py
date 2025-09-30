@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 from database import SessionLocal
 from models import ChamberLog
 from git_push import git_push
+from main import start_keep_alive, stop_keep_alive   # 🔥 import fungsi keep-alive
 
 # ===== CONFIG =====
 BROKER = "broker.hivemq.com"
@@ -44,7 +45,7 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
         latest_data = payload
         last_data_time = time.time()
-        new_data_received = True
+        new_data_received = True   # data baru datang
     except Exception as e:
         print("Error parsing message:", e)
 
@@ -67,12 +68,7 @@ def archive_session_to_csv(start_time, end_time):
         file_name = f"session_{start_time.strftime('%Y-%m-%d_%H-%M-%S')}.csv"
         file_path = os.path.join(ARCHIVE_FOLDER, file_name)
 
-        fieldnames = [
-            "id","tanggal","waktu",
-            "temperature1","temperature2",
-            "humidity1","humidity2",
-            "status","created_at"
-        ]
+        fieldnames = ["id","tanggal","waktu","temperature1","temperature2","humidity1","humidity2","status","created_at"]
         with open(file_path, "w", newline="", encoding="utf-8") as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
@@ -89,11 +85,20 @@ def archive_session_to_csv(start_time, end_time):
                     "created_at": log.created_at.strftime("%Y-%m-%d %H:%M:%S")
                 })
 
-        print(f"✅ Archived session → {file_path}")
-        git_push(file_path)  # push ke GitHub
+        print(f"📦 Archived session → {file_path}")
+        git_push(file_path)  # 🔥 Push otomatis ke GitHub
         return file_path
     finally:
         db.close()
+
+# ===== HELPER (keep-alive control) =====
+def handle_chamber_on():
+    stop_keep_alive()
+    print("✅ Chamber hidup, stop keep-alive")
+
+def handle_chamber_off():
+    start_keep_alive()
+    print("⚠️ Chamber mati, start keep-alive")
 
 # ===== MQTT CLIENT =====
 client = mqtt.Client(protocol=mqtt.MQTTv311)
@@ -105,42 +110,21 @@ client.connect(BROKER, PORT, 60)
 while True:
     client.loop(timeout=1.0)
     now = time.time()
-
-    # ✅ Detect chamber ON
+    
+    # Chamber baru ON
     if new_data_received and not chamber_on:
         chamber_on = True
         session_start_time = datetime.now(timezone.utc).astimezone(WIB)
         print("✅ Chamber ON - session started")
         chamber_off_notified = False
         new_data_received = False
+        handle_chamber_on()
 
-    # ⚠️ Detect chamber OFF
+    # Chamber mati
     if chamber_on and last_data_time and now - last_data_time > TIMEOUT_OFF:
         chamber_on = False
         session_end_time = datetime.now(timezone.utc).astimezone(WIB)
-
         if not chamber_off_notified:
-            # Simpan status OFF ke DB
-            db = SessionLocal()
-            try:
-                dt = datetime.now(timezone.utc).astimezone(WIB)
-                log = ChamberLog(
-                    tanggal=dt.strftime("%Y-%m-%d"),
-                    waktu=dt.strftime("%H:%M:%S"),
-                    temperature1=None,
-                    temperature2=None,
-                    humidity1=None,
-                    humidity2=None,
-                    status="OFF",
-                    created_at=dt
-                )
-                db.add(log)
-                db.commit()
-                print("⚠️ Chamber OFF - status disimpan ke DB")
-            finally:
-                db.close()
-
-            # Archive log
             db = SessionLocal()
             logs = db.query(ChamberLog).filter(
                 ChamberLog.created_at >= session_start_time,
@@ -153,11 +137,13 @@ while True:
                 archive_session_to_csv(session_start_time, session_end_time)
             else:
                 print("⚠️ Chamber OFF - no logs, skipped archive")
-
+       
             chamber_off_notified = True
-            session_start_time = None
+            handle_chamber_off()
 
-    # 📝 Simpan data tiap 1 menit
+        session_start_time = None
+
+    # Simpan data ke DB tiap 1 menit sekali
     if chamber_on and latest_data and now - last_write_time >= LOG_INTERVAL:
         db = SessionLocal()
         try:
