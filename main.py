@@ -74,7 +74,7 @@ async def keep_alive_loop():
                 db.close()
 
                 if last_log and last_log.status == "OFF":
-                    await client.head("https://your-app-name.repl.co/ping", timeout=10)
+                    await client.head("https://4b07b8d1-5cf2-4d6d-bd0b-352fbfc2a886-00-6y30akrlro5p.pike.replit.dev/ping", timeout=10)
                     print("🔄 Keep-alive ping sent (chamber OFF)")
                 else:
                     print("✅ Chamber ON, keep-alive tidak jalan")
@@ -87,3 +87,4 @@ async def keep_alive_loop():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(keep_alive_loop())
+
