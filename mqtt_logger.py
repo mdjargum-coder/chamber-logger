@@ -19,7 +19,7 @@ BROKER = os.environ.get("MQTT_BROKER", "broker.hivemq.com")
 PORT = int(os.environ.get("MQTT_PORT", 1883))
 TOPIC = os.environ.get("MQTT_TOPIC", "chamber/log")
 LOG_INTERVAL = int(os.environ.get("LOG_INTERVAL", 60))      # seconds between DB writes
-TIMEOUT_OFF = int(os.environ.get("TIMEOUT_OFF", 180))       # seconds to consider OFF
+TIMEOUT_OFF = int(os.environ.get("TIMEOUT_OFF", 120))       # seconds to consider OFF
 ARCHIVE_FOLDER = os.path.join(os.path.dirname(__file__), "archives")
 TIMEZONE_OFFSET = int(os.environ.get("TIMEZONE_OFFSET", 7))  # WIB = UTC+7
 
@@ -218,3 +218,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
