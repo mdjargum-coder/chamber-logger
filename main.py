@@ -8,15 +8,14 @@ import os
 import asyncio
 import httpx
 
-# ===== DB SETUP =====
+# Buat tabel database
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # atau domain frontend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,14 +24,52 @@ app.add_middleware(
 ARCHIVE_FOLDER = "archives"
 os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
 
-# ===== ROUTES =====
+# ===== KEEP ALIVE CONFIG =====
+PING_URL = "https://4b07b8d1-5cf2-4d6d-bd0b-352fbfc2a886-00-6y30akrlro5p.pike.replit.dev/ping" 
+PING_INTERVAL = 120  # 2 menit sekali
+
+_keep_alive_task = None
+
+
+async def _keep_alive_loop():
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.head(PING_URL, timeout=10)
+                print(f"🔄 Keep-alive ping → {r.status_code}")
+        except Exception as e:
+            print(f"⚠️ Keep-alive error: {e}")
+        await asyncio.sleep(PING_INTERVAL)
+
+
+def start_keep_alive():
+    """Aktifkan keep-alive ping"""
+    global _keep_alive_task
+    if _keep_alive_task is None or _keep_alive_task.done():
+        loop = asyncio.get_event_loop()
+        _keep_alive_task = loop.create_task(_keep_alive_loop())
+        print("▶️ Keep-alive started")
+
+
+def stop_keep_alive():
+    """Matikan keep-alive ping"""
+    global _keep_alive_task
+    if _keep_alive_task and not _keep_alive_task.done():
+        _keep_alive_task.cancel()
+        _keep_alive_task = None
+        print("⏹️ Keep-alive stopped")
+
+
+# ===== API ENDPOINTS =====
 @app.get("/")
 def root():
     return {"message": "Chamber Logger API running"}
 
+
 @app.get("/logs")
 def get_logs(db: Session = Depends(get_db)):
     return db.query(ChamberLog).all()
+
 
 @app.get("/status")
 def status(db: Session = Depends(get_db)):
@@ -41,16 +78,19 @@ def status(db: Session = Depends(get_db)):
         return {"status": last_log.status, "last_entry": last_log}
     return {"status": "OFF", "last_entry": None}
 
+
 @app.get("/archives")
 def list_archives(request: Request):
     files = sorted(os.listdir(ARCHIVE_FOLDER))
     base_url = str(request.base_url).replace("http://", "https://").rstrip("/")
+
     return {
         "archives": [
             f"{base_url}/download/{fname}"
             for fname in files if fname.endswith(".csv")
         ]
     }
+
 
 @app.get("/download/{filename}")
 def download_csv(filename: str):
@@ -59,32 +99,23 @@ def download_csv(filename: str):
         return FileResponse(file_path, media_type="text/csv", filename=filename)
     return {"error": "File not found"}
 
+
 @app.get("/ping")
 @app.head("/ping")
 def ping():
     return {"status": "ok"}
 
-# ===== KEEP ALIVE LOOP =====
-async def keep_alive_loop():
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                db = SessionLocal()
-                last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
-                db.close()
 
-                if last_log and last_log.status == "OFF":
-                    await client.head("https://4b07b8d1-5cf2-4d6d-bd0b-352fbfc2a886-00-6y30akrlro5p.pike.replit.dev/ping", timeout=10)
-                    print("🔄 Keep-alive ping sent (chamber OFF)")
-                else:
-                    print("✅ Chamber ON, keep-alive tidak jalan")
-
-            except Exception as e:
-                print(f"⚠️ Keep-alive error: {e}")
-
-            await asyncio.sleep(120)  # tiap 2 menit
-
+# ===== STARTUP EVENT =====
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(keep_alive_loop())
-
+    """Cek status terakhir chamber dari DB saat startup"""
+    db = SessionLocal()
+    try:
+        last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
+        if not last_log or last_log.status == "OFF":
+            start_keep_alive()
+        else:
+            stop_keep_alive()
+    finally:
+        db.close()
