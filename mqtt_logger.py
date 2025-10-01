@@ -91,6 +91,30 @@ def archive_session_to_csv(start_time, end_time):
     finally:
         db.close()
 
+# ===== INSERT OFF LOG =====
+def insert_off_log(end_time):
+    from database import SessionLocal
+    from models import ChamberLog
+    db = SessionLocal()
+    try:
+        off_log = ChamberLog(
+            tanggal=end_time.strftime("%Y-%m-%d"),
+            waktu=end_time.strftime("%H:%M:%S"),
+            humidity1=None,
+            temperature1=None,
+            humidity2=None,
+            temperature2=None,
+            status="OFF",
+            created_at=end_time
+        )
+        db.add(off_log)
+        db.commit()
+        print("📌 OFF status logged into DB")
+    except Exception as e:
+        print("⚠️ Failed to insert OFF log:", e)
+    finally:
+        db.close()
+
 # ===== HELPER (keep-alive control) =====
 def handle_chamber_on():
     stop_keep_alive()
@@ -134,7 +158,10 @@ while True:
 
             if logs > 0:
                 print("⚠️ Chamber OFF - session ended")
-                archive_session_to_csv(session_start_time, session_end_time)
+                csv_path = archive_session_to_csv(session_start_time, session_end_time)
+                if csv_path:
+                    # catat OFF di DB
+                    insert_off_log(session_end_time)
             else:
                 print("⚠️ Chamber OFF - no logs, skipped archive")
        
