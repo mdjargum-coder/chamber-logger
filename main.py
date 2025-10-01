@@ -1,11 +1,10 @@
-# main.py (perbaikan)
 import os
 import threading
 import asyncio
 import httpx
 from fastapi import FastAPI, Depends
 from database import SessionLocal
-from models import ChamberLog            # <---- PENTING: import model
+from models import ChamberLog
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -43,8 +42,9 @@ def _start_ping_thread():
     global _ping_thread, _stop_event
     if _ping_thread is None or not _ping_thread.is_alive():
         _stop_event.clear()
-        # run async loop inside thread
-        _ping_thread = threading.Thread(target=lambda: asyncio.run(_ping_loop_async()), daemon=True)
+        _ping_thread = threading.Thread(
+            target=lambda: asyncio.run(_ping_loop_async()), daemon=True
+        )
         _ping_thread.start()
         print("▶️ Keep-alive thread started")
 
@@ -55,13 +55,13 @@ def _stop_ping_thread():
     print("🛑 Keep-alive thread signalled to stop")
 
 
-# synchronous wrappers exported for mqtt_logger to call
-def start_keep_alive():
-    _start_ping_thread()
-
-
-def stop_keep_alive():
-    _stop_ping_thread()
+# dependency untuk DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def _get_last_log():
@@ -74,17 +74,15 @@ def _get_last_log():
 
 @app.on_event("startup")
 async def on_startup():
-    # cek status terakhir dari DB dan tentukan apakah perlu start keep-alive
     last = _get_last_log()
     now = datetime.now()
-    STARTUP_OFF_THRESHOLD = int(os.environ.get("STARTUP_OFF_THRESHOLD", 180))  # detik
+    STARTUP_OFF_THRESHOLD = int(os.environ.get("STARTUP_OFF_THRESHOLD", 180))
 
     if last is None:
         print("ℹ️ Startup: no previous log found -> starting keep-alive")
         _start_ping_thread()
         return
 
-    # jika ada field status dan bernilai "OFF" -> start
     last_status = getattr(last, "status", None)
     created_at = getattr(last, "created_at", None)
 
@@ -93,9 +91,7 @@ async def on_startup():
         _start_ping_thread()
         return
 
-    # fallback: jika last.created_at terlalu lama -> start
     if created_at:
-        # buat created_at dan now sama tipe (naive)
         try:
             if (now - created_at).total_seconds() > STARTUP_OFF_THRESHOLD:
                 print("⚠️ Startup: last log too old -> starting keep-alive")
@@ -103,7 +99,6 @@ async def on_startup():
             else:
                 print("✅ Startup: recent log found -> keep-alive not needed")
         except Exception:
-            # jika tipe timezone mismatch, just start keep-alive as safe fallback
             print("⚠️ Startup: datetime mismatch -> starting keep-alive")
             _start_ping_thread()
     else:
@@ -126,10 +121,10 @@ def root():
 def ping():
     return {"status": "ok"}
 
+
 @app.get("/logs")
 def get_logs(db: Session = Depends(get_db)):
     logs = db.query(ChamberLog).order_by(ChamberLog.timestamp.desc()).limit(200).all()
-    # urutkan biar lama → baru
     logs = list(reversed(logs))
     return [
         {
@@ -143,8 +138,3 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
-
-
-
-
-
