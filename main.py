@@ -132,16 +132,23 @@ async def on_shutdown():
 def root():
     return {"message": "ok"}
 
-@app.get("/logs")
-def get_logs(db: Session = Depends(get_db)):
-    return db.query(ChamberLog).all()
-
 @app.get("/status")
 def status(db: Session = Depends(get_db)):
     last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
     if last_log:
-        return {"status": last_log.status, "last_entry": last_log}
+        return {
+            "status": last_log.status,
+            "last_entry": {
+                "id": last_log.id,
+                "timestamp": last_log.timestamp.isoformat() if last_log.timestamp else None,
+                "temperature1": last_log.temperature1,
+                "temperature2": last_log.temperature2,
+                "humidity1": last_log.humidity1,
+                "humidity2": last_log.humidity2,
+            }
+        }
     return {"status": "OFF", "last_entry": None}
+
 
 @app.get("/archives")
 def list_archives(request: Request):
@@ -184,5 +191,6 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
 
 
