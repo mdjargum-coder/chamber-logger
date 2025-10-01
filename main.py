@@ -134,21 +134,21 @@ def root():
 
 @app.get("/status")
 def status(db: Session = Depends(get_db)):
-    last_log = db.query(ChamberLog).order_by(ChamberLog.created_at.desc()).first()
-    if last_log:
-        return {
-            "status": last_log.status,
-            "last_entry": {
-                "id": last_log.id,
-                "timestamp": last_log.created_at.isoformat() if last_log.created_at else None,
-                "temperature1": last_log.temperature1,
-                "temperature2": last_log.temperature2,
-                "humidity1": last_log.humidity1,
-                "humidity2": last_log.humidity2,
-            }
-        }
-    return {"status": "OFF", "last_entry": None}
+    last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
+    if not last_log:
+        return {"status": "OFF", "last_entry": None}
 
+    return {
+        "status": last_log.status,
+        "last_entry": {
+            "id": last_log.id,
+            "timestamp": last_log.created_at.isoformat() if last_log.created_at else None,
+            "temperature1": last_log.temperature1,
+            "temperature2": last_log.temperature2,
+            "humidity1": last_log.humidity1,
+            "humidity2": last_log.humidity2,
+        }
+    }
 
 @app.get("/archives")
 def list_archives(request: Request):
@@ -191,6 +191,7 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
 
 
 
