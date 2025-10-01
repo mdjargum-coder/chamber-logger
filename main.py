@@ -3,7 +3,7 @@ import os
 import threading
 import asyncio
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from database import SessionLocal
 from models import ChamberLog            # <---- PENTING: import model
 from datetime import datetime
@@ -142,6 +142,7 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
 
 
 
