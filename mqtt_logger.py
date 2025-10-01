@@ -15,7 +15,7 @@ BROKER = "broker.hivemq.com"
 PORT = 1883
 TOPIC = "chamber/log"
 LOG_INTERVAL = 60      # tulis log tiap 1 menit
-TIMEOUT_OFF = 90       # 1.30 menit tanpa data = chamber OFF
+TIMEOUT_OFF = 60       # 1 menit tanpa data = chamber OFF
 ARCHIVE_FOLDER = os.path.join(os.path.dirname(__file__), "archives")
 TIMEZONE_OFFSET = 7    # WIB = UTC+7
 
