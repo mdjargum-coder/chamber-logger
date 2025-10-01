@@ -124,3 +124,22 @@ def root():
 @app.get("/ping")
 def ping():
     return {"status": "ok"}
+
+@app.get("/logs")
+def get_logs():
+    db = SessionLocal()
+    # Ambil max 200 log terakhir (apapun statusnya)
+    logs = db.query(ChamberLog).order_by(ChamberLog.id.desc()).limit(200).all()
+    return [
+        {
+            "tanggal": log.tanggal,
+            "waktu": log.waktu,
+            "temperature1": log.temperature1,
+            "temperature2": log.temperature2,
+            "humidity1": log.humidity1,
+            "humidity2": log.humidity2,
+            "status": log.status,
+        }
+        for log in reversed(logs)
+    ]
+
