@@ -1,54 +1,126 @@
+# main.py (perbaikan)
+import os
+import threading
 import asyncio
 import httpx
-from sqlalchemy.orm import Session
+from fastapi import FastAPI
 from database import SessionLocal
-import threading
+from models import ChamberLog            # <---- PENTING: import model
+from datetime import datetime
 
-KEEP_ALIVE_URL = "https://4b07b8d1-5cf2-4d6d-bd0b-352fbfc2a886-00-6y30akrlro5p.pike.replit.dev/ping"
-PING_INTERVAL = 120  # 2 menit sekali
-ping_task = None
-stop_event = threading.Event()
+app = FastAPI()
+
+KEEP_ALIVE_URL = os.environ.get(
+    "REPLIT_PING_URL",
+    "https://4b07b8d1-5cf2-4d6d-bd0b-352fbfc2a886-00-6y30akrlro5p.pike.replit.dev/ping"
+)
+PING_INTERVAL = int(os.environ.get("PING_INTERVAL", 120))
+
+# threading control
+_ping_thread = None
+_stop_event = threading.Event()
 
 
-def get_last_status():
-    """Ambil status terakhir dari database."""
-    db: Session = SessionLocal()
+async def _ping_once():
+    async with httpx.AsyncClient() as client:
+        return await client.head(KEEP_ALIVE_URL, timeout=10)
+
+
+async def _ping_loop_async():
+    async with httpx.AsyncClient() as client:
+        while not _stop_event.is_set():
+            try:
+                r = await client.head(KEEP_ALIVE_URL, timeout=10)
+                print(f"🔄 Keep-alive ping → {r.status_code}")
+            except Exception as e:
+                print("⚠️ Keep-alive error:", e)
+            await asyncio.sleep(PING_INTERVAL)
+    print("⏹️ Keep-alive loop ended")
+
+
+def _start_ping_thread():
+    global _ping_thread, _stop_event
+    if _ping_thread is None or not _ping_thread.is_alive():
+        _stop_event.clear()
+        # run async loop inside thread
+        _ping_thread = threading.Thread(target=lambda: asyncio.run(_ping_loop_async()), daemon=True)
+        _ping_thread.start()
+        print("▶️ Keep-alive thread started")
+
+
+def _stop_ping_thread():
+    global _stop_event
+    _stop_event.set()
+    print("🛑 Keep-alive thread signalled to stop")
+
+
+# synchronous wrappers exported for mqtt_logger to call
+def start_keep_alive():
+    _start_ping_thread()
+
+
+def stop_keep_alive():
+    _stop_ping_thread()
+
+
+def _get_last_log():
+    db = SessionLocal()
     try:
-        last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
-        return last_log.status if last_log else "OFF"
+        return db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
     finally:
         db.close()
 
 
-async def ping_loop():
-    """Loop keep-alive yang jalan di background."""
-    async with httpx.AsyncClient() as client:
-        while not stop_event.is_set():
-            try:
-                resp = await client.get(KEEP_ALIVE_URL, timeout=10)
-                print(f"🌍 Keep-alive ping → {resp.status_code}")
-            except Exception as e:
-                print(f"⚠️ Keep-alive gagal: {e}")
-            await asyncio.sleep(PING_INTERVAL)
+@app.on_event("startup")
+async def on_startup():
+    # cek status terakhir dari DB dan tentukan apakah perlu start keep-alive
+    last = _get_last_log()
+    now = datetime.now()
+    STARTUP_OFF_THRESHOLD = int(os.environ.get("STARTUP_OFF_THRESHOLD", 180))  # detik
+
+    if last is None:
+        print("ℹ️ Startup: no previous log found -> starting keep-alive")
+        _start_ping_thread()
+        return
+
+    # jika ada field status dan bernilai "OFF" -> start
+    last_status = getattr(last, "status", None)
+    created_at = getattr(last, "created_at", None)
+
+    if last_status == "OFF":
+        print("⚠️ Startup: last status OFF -> starting keep-alive")
+        _start_ping_thread()
+        return
+
+    # fallback: jika last.created_at terlalu lama -> start
+    if created_at:
+        # buat created_at dan now sama tipe (naive)
+        try:
+            if (now - created_at).total_seconds() > STARTUP_OFF_THRESHOLD:
+                print("⚠️ Startup: last log too old -> starting keep-alive")
+                _start_ping_thread()
+            else:
+                print("✅ Startup: recent log found -> keep-alive not needed")
+        except Exception:
+            # jika tipe timezone mismatch, just start keep-alive as safe fallback
+            print("⚠️ Startup: datetime mismatch -> starting keep-alive")
+            _start_ping_thread()
+    else:
+        print("ℹ️ Startup: last log has no created_at -> starting keep-alive")
+        _start_ping_thread()
 
 
-def start_keep_alive():
-    """Mulai keep-alive loop (hanya sekali)."""
-    global ping_task, stop_event
-    if ping_task is None or not ping_task.is_alive():
-        stop_event.clear()
-        ping_task = threading.Thread(target=lambda: asyncio.run(ping_loop()), daemon=True)
-        ping_task.start()
-        print("✅ Keep-alive loop DIMULAI")
+@app.on_event("shutdown")
+async def on_shutdown():
+    _stop_ping_thread()
 
 
-def stop_keep_alive():
-    """Hentikan keep-alive loop."""
-    global stop_event
-    stop_event.set()
-    print("🛑 Keep-alive loop DIHENTIKAN")
+@app.get("/")
+def root():
+    return {"message": "ok"}
 
 
-# === Jalankan sekali saat startup ===
-if get_last_status() == "OFF":
-    start_keep_alive()
+@app.head("/ping")
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
