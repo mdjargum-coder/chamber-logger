@@ -2,14 +2,31 @@ import os
 import threading
 import asyncio
 import httpx
-from fastapi import FastAPI, Depends
-from database import SessionLocal
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from database import SessionLocal, engine, Base, get_db
 from models import ChamberLog
 from datetime import datetime
 from sqlalchemy.orm import Session
 
+# Buat tabel database
+Base.metadata.create_all(bind=engine)
+
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # atau domain frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+ARCHIVE_FOLDER = "archives"
+os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
+
+# ===== KEEP ALIVE CONFIG =====
 KEEP_ALIVE_URL = os.environ.get(
     "REPLIT_PING_URL",
     "https://4b07b8d1-5cf2-4d6d-bd0b-352fbfc2a886-00-6y30akrlro5p.pike.replit.dev/ping"
@@ -71,7 +88,7 @@ def _get_last_log():
     finally:
         db.close()
 
-
+# ===== STARTUP EVENT =====
 @app.on_event("startup")
 async def on_startup():
     last = _get_last_log()
@@ -110,7 +127,7 @@ async def on_startup():
 async def on_shutdown():
     _stop_ping_thread()
 
-
+# ===== API ENDPOINTS =====
 @app.get("/")
 def root():
     return {"message": "ok"}
@@ -167,4 +184,5 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
 
