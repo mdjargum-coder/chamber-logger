@@ -134,13 +134,13 @@ def root():
 
 @app.get("/status")
 def status(db: Session = Depends(get_db)):
-    last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
+    last_log = db.query(ChamberLog).order_by(ChamberLog.created_at.desc()).first()
     if last_log:
         return {
             "status": last_log.status,
             "last_entry": {
                 "id": last_log.id,
-                "timestamp": last_log.timestamp.isoformat() if last_log.timestamp else None,
+                "timestamp": last_log.created_at.isoformat() if last_log.created_at else None,
                 "temperature1": last_log.temperature1,
                 "temperature2": last_log.temperature2,
                 "humidity1": last_log.humidity1,
@@ -177,12 +177,12 @@ def ping():
 
 @app.get("/logs")
 def get_logs(db: Session = Depends(get_db)):
-    logs = db.query(ChamberLog).order_by(ChamberLog.timestamp.desc()).limit(200).all()
+    logs = db.query(ChamberLog).order_by(ChamberLog.created_at.desc()).limit(200).all()
     logs = list(reversed(logs))
     return [
         {
             "id": log.id,
-            "timestamp": log.timestamp.isoformat(),
+            "timestamp": log.created_at.isoformat() if log.created_at else None,
             "humidity1": log.humidity1,
             "temperature1": log.temperature1,
             "humidity2": log.humidity2,
@@ -191,6 +191,7 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
 
 
 
