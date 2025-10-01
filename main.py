@@ -7,6 +7,7 @@ from fastapi import FastAPI, Depends
 from database import SessionLocal
 from models import ChamberLog            # <---- PENTING: import model
 from datetime import datetime
+from sqlalchemy.orm import Session
 
 app = FastAPI()
 
@@ -142,6 +143,7 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
 
 
 
