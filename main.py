@@ -115,6 +115,35 @@ async def on_shutdown():
 def root():
     return {"message": "ok"}
 
+@app.get("/logs")
+def get_logs(db: Session = Depends(get_db)):
+    return db.query(ChamberLog).all()
+
+@app.get("/status")
+def status(db: Session = Depends(get_db)):
+    last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
+    if last_log:
+        return {"status": last_log.status, "last_entry": last_log}
+    return {"status": "OFF", "last_entry": None}
+
+@app.get("/archives")
+def list_archives(request: Request):
+    files = sorted(os.listdir(ARCHIVE_FOLDER))
+    base_url = str(request.base_url).replace("http://", "https://").rstrip("/")
+
+    return {
+        "archives": [
+            f"{base_url}/download/{fname}"
+            for fname in files if fname.endswith(".csv")
+        ]
+    }
+
+@app.get("/download/{filename}")
+def download_csv(filename: str):
+    file_path = os.path.join(ARCHIVE_FOLDER, filename)
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="text/csv", filename=filename)
+    return {"error": "File not found"}
 
 @app.head("/ping")
 @app.get("/ping")
@@ -138,3 +167,4 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
