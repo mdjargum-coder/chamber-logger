@@ -9,6 +9,8 @@ from database import SessionLocal, engine, Base, get_db
 from models import ChamberLog
 from datetime import datetime
 from sqlalchemy.orm import Session
+import uvicorn
+from mqtt_logger import main as mqtt_main_async  # versi async
 
 # Buat tabel database
 Base.metadata.create_all(bind=engine)
@@ -91,6 +93,9 @@ def _get_last_log():
 # ===== STARTUP EVENT =====
 @app.on_event("startup")
 async def on_startup():
+	# start mqtt logger async task di background
+    loop = asyncio.get_event_loop()
+    loop.create_task(mqtt_main_async())
     last = _get_last_log()
     now = datetime.now()
     STARTUP_OFF_THRESHOLD = int(os.environ.get("STARTUP_OFF_THRESHOLD", 180))
@@ -191,6 +196,10 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
+
+
+
 
 
 
