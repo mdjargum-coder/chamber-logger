@@ -8,14 +8,14 @@ from datetime import datetime, timezone, timedelta
 from database import SessionLocal
 from models import ChamberLog
 from git_push import git_push
-from main import start_keep_alive, stop_keep_alive   # 🔥 import fungsi keep-alive
+from main import start_keep_alive, stop_keep_alive
 
 # ===== CONFIG =====
 BROKER = "broker.hivemq.com"
 PORT = 1883
 TOPIC = "chamber/log"
 LOG_INTERVAL = 60      # tulis log tiap 1 menit
-TIMEOUT_OFF = 60       # 1 menit tanpa data = chamber OFF
+TIMEOUT_OFF = 90       # 1 menit tanpa data = chamber OFF
 ARCHIVE_FOLDER = os.path.join(os.path.dirname(__file__), "archives")
 TIMEZONE_OFFSET = 7    # WIB = UTC+7
 
@@ -113,14 +113,52 @@ def log_status(status: str):
         db.close()
 
 def handle_chamber_on():
+    global chamber_on
     stop_keep_alive()
+    chamber_on = True
     print("✅ Chamber hidup, stop keep-alive")
     log_status("ON")
 
 def handle_chamber_off():
+    global chamber_on
     start_keep_alive()
+    chamber_on = False
     print("⚠️ Chamber mati, start keep-alive")
     log_status("OFF")
+
+# ===== STARTUP CHECK =====
+def startup_check():
+    db = SessionLocal()
+    try:
+        last = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
+        now = datetime.now(timezone.utc).astimezone(WIB)
+
+        if last is None:
+            print("ℹ️ Startup: no previous log found → start keep-alive")
+            handle_chamber_off()
+            return
+
+        last_status = getattr(last, "status", None)
+        last_time = getattr(last, "created_at", None)
+        last_time = last_time.astimezone(WIB) if last_time else None
+
+        if last_status == "OFF":
+            print("⚠️ Startup: last status OFF → start keep-alive")
+            handle_chamber_off()
+            return
+
+        if last_status == "ON" and last_time:
+            age = (now - last_time).total_seconds()
+            if age > TIMEOUT_OFF:
+                print("⚠️ Startup: last ON log too old → Chamber dianggap mati")
+                handle_chamber_off()
+            else:
+                print("✅ Startup: Chamber masih ON → stop keep-alive")
+                stop_keep_alive()
+                global chamber_on
+                chamber_on = True
+    finally:
+        db.close()
 
 # ===== MQTT CLIENT =====
 client = mqtt.Client(protocol=mqtt.MQTTv311)
@@ -128,41 +166,27 @@ client.on_connect = on_connect
 client.on_message = on_message
 client.connect(BROKER, PORT, 60)
 
+# ===== RUN STARTUP CHECK =====
+startup_check()
+
 # ===== LOOP =====
 while True:
     client.loop(timeout=1.0)
     now = time.time()
-    
+
     # Chamber baru ON
     if new_data_received and not chamber_on:
-        chamber_on = True
         session_start_time = datetime.now(timezone.utc).astimezone(WIB)
         print("✅ Chamber ON - session started")
-        chamber_off_notified = False
         new_data_received = False
         handle_chamber_on()
 
     # Chamber mati (tidak ada data > TIMEOUT_OFF)
     if chamber_on and last_data_time and now - last_data_time > TIMEOUT_OFF:
-        chamber_on = False
         session_end_time = datetime.now(timezone.utc).astimezone(WIB)
-        if not chamber_off_notified:
-            db = SessionLocal()
-            logs = db.query(ChamberLog).filter(
-                ChamberLog.created_at >= session_start_time,
-                ChamberLog.created_at <= session_end_time
-            ).count()
-            db.close()
-
-            if logs > 0:
-                print("⚠️ Chamber OFF - session ended")
-                archive_session_to_csv(session_start_time, session_end_time)
-            else:
-                print("⚠️ Chamber OFF - no logs, skipped archive")
-       
-            chamber_off_notified = True
-            handle_chamber_off()
-
+        print("⚠️ Chamber OFF - timeout exceeded")
+        archive_session_to_csv(session_start_time, session_end_time)
+        handle_chamber_off()
         session_start_time = None
 
     # Simpan data ke DB tiap 1 menit sekali
