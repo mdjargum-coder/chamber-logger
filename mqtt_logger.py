@@ -45,7 +45,7 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
         latest_data = payload
         last_data_time = time.time()
-        new_data_received = True   # data baru datang
+        new_data_received = True
     except Exception as e:
         print("Error parsing message:", e)
 
@@ -86,60 +86,41 @@ def archive_session_to_csv(start_time, end_time):
                 })
 
         print(f"📦 Archived session → {file_path}")
-        git_push(file_path)  # 🔥 Push otomatis ke GitHub
+        git_push(file_path)
         return file_path
     finally:
         db.close()
 
-# ===== HELPER (keep-alive control + status log) =====
-def handle_chamber_on():
-    stop_keep_alive()
-    print("✅ Chamber hidup, stop keep-alive")
-
-    # catat status ON
+# ===== STATUS LOG HELPERS =====
+def log_status(status: str):
     db = SessionLocal()
     try:
         dt = datetime.now(timezone.utc).astimezone(WIB)
-        on_log = ChamberLog(
+        log = ChamberLog(
             tanggal=dt.strftime("%Y-%m-%d"),
             waktu=dt.strftime("%H:%M:%S"),
             humidity1=None,
             temperature1=None,
             humidity2=None,
             temperature2=None,
-            status="ON",
+            status=status,
             created_at=dt
         )
-        db.add(on_log)
+        db.add(log)
         db.commit()
-        print("📌 ON status logged into DB")
+        print(f"📌 {status} status logged into DB")
     finally:
         db.close()
 
+def handle_chamber_on():
+    stop_keep_alive()
+    print("✅ Chamber hidup, stop keep-alive")
+    log_status("ON")
 
 def handle_chamber_off():
     start_keep_alive()
     print("⚠️ Chamber mati, start keep-alive")
-
-    # catat status OFF
-    db = SessionLocal()
-    try:
-        dt = datetime.now(timezone.utc).astimezone(WIB)
-        off_log = ChamberLog(
-            tanggal=dt.strftime("%Y-%m-%d"),
-            waktu=dt.strftime("%H:%M:%S"),
-            humidity1=None,
-            temperature1=None,
-            humidity2=None,
-            temperature2=None,
-            status="OFF",
-            created_at=dt
-        )
-        db.add(off_log)
-        db.commit()
-        print("📌 OFF status logged into DB")
-    finally:
-        db.close()
+    log_status("OFF")
 
 # ===== MQTT CLIENT =====
 client = mqtt.Client(protocol=mqtt.MQTTv311)
@@ -161,7 +142,7 @@ while True:
         new_data_received = False
         handle_chamber_on()
 
-    # Chamber mati
+    # Chamber mati (tidak ada data > TIMEOUT_OFF)
     if chamber_on and last_data_time and now - last_data_time > TIMEOUT_OFF:
         chamber_on = False
         session_end_time = datetime.now(timezone.utc).astimezone(WIB)
