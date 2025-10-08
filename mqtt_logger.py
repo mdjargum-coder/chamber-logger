@@ -25,6 +25,7 @@ last_data_time = None
 last_write_time = time.time()
 chamber_on = False
 session_start_time = None
+chamber_off_notified = False
 new_data_received = False
 
 os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
@@ -112,8 +113,7 @@ def handle_chamber_on():
     global chamber_on, session_start_time
     stop_keep_alive()
     chamber_on = True
-    if session_start_time is None:
-        session_start_time = datetime.now(timezone.utc).astimezone(WIB)
+    session_start_time = datetime.now(timezone.utc).astimezone(WIB)
     print("✅ Chamber hidup, stop keep-alive")
     log_status("ON")
 
@@ -127,7 +127,6 @@ def handle_chamber_off():
 
 # ===== STARTUP CHECK =====
 def startup_check():
-    global chamber_on, session_start_time
     db = SessionLocal()
     try:
         last = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
@@ -151,11 +150,11 @@ def startup_check():
             age = (now - last_time).total_seconds()
             if age > TIMEOUT_OFF:
                 print("⚠️ Startup: last ON log too old → Chamber dianggap mati")
-                archive_session_to_csv(last_time, now)
                 handle_chamber_off()
             else:
                 print("✅ Startup: Chamber masih ON → stop keep-alive")
                 stop_keep_alive()
+                global chamber_on, session_start_time
                 chamber_on = True
                 session_start_time = last_time
     finally:
@@ -167,10 +166,9 @@ client.on_connect = on_connect
 client.on_message = on_message
 client.connect(BROKER, PORT, 60)
 
-# jalankan startup check sebelum loop
 startup_check()
 
-# ===== MAIN LOOP =====
+# ===== LOOP =====
 while True:
     client.loop(timeout=1.0)
     now = time.time()
@@ -182,26 +180,25 @@ while True:
 
     # Chamber mati: fallback timeout
     if chamber_on:
-        # fallback DB check jika MQTT tidak mengirim data
-        db = SessionLocal()
-        try:
-            last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
-            if last_log and last_log.status == "ON":
-                last_log_time = last_log.created_at.astimezone(WIB)
-                age = (datetime.now(timezone.utc).astimezone(WIB) - last_log_time).total_seconds()
-                if age > TIMEOUT_OFF:
-                    print("⚠️ Chamber OFF (fallback DB timeout)")
-                    archive_session_to_csv(session_start_time, datetime.now(timezone.utc).astimezone(WIB))
-                    handle_chamber_off()
-        finally:
-            db.close()
-        # jika MQTT masih aktif, cek last_data_time
-        if last_data_time and (now - last_data_time > TIMEOUT_OFF):
+        if last_data_time is None:
+            # fallback: cek DB log terakhir
+            db = SessionLocal()
+            try:
+                last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
+                if last_log and last_log.status == "ON":
+                    age = (datetime.now(timezone.utc).astimezone(WIB) - last_log.created_at.astimezone(WIB)).total_seconds()
+                    if age > TIMEOUT_OFF:
+                        print("⚠️ Chamber OFF (fallback DB timeout)")
+                        archive_session_to_csv(session_start_time, datetime.now(timezone.utc).astimezone(WIB))
+                        handle_chamber_off()
+            finally:
+                db.close()
+        elif now - last_data_time > TIMEOUT_OFF:
             print("⚠️ Chamber OFF - timeout exceeded")
             archive_session_to_csv(session_start_time, datetime.now(timezone.utc).astimezone(WIB))
             handle_chamber_off()
 
-    # Simpan data ke DB tiap LOG_INTERVAL
+    # Simpan data ke DB tiap 1 menit
     if chamber_on and latest_data and now - last_write_time >= LOG_INTERVAL:
         db = SessionLocal()
         try:
