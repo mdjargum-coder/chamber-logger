@@ -1,11 +1,9 @@
-import asyncio
+import paho.mqtt.client as mqtt
 import json
+import time
 import os
 import csv
 from datetime import datetime, timezone, timedelta
-import time
-
-import paho.mqtt.client as mqtt
 
 from database import SessionLocal
 from models import ChamberLog
@@ -16,7 +14,7 @@ from main import start_keep_alive, stop_keep_alive
 BROKER = "broker.hivemq.com"
 PORT = 1883
 TOPIC = "chamber/log"
-LOG_INTERVAL = 60      # simpan data tiap 1 menit
+LOG_INTERVAL = 60      # tulis log tiap 1 menit
 TIMEOUT_OFF = 90       # 1.5 menit tanpa data = chamber OFF
 ARCHIVE_FOLDER = os.path.join(os.path.dirname(__file__), "archives")
 TIMEZONE_OFFSET = 7    # WIB = UTC+7
@@ -32,7 +30,7 @@ new_data_received = False
 os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
 WIB = timezone(timedelta(hours=TIMEZONE_OFFSET))
 
-# ===== CALLBACK MQTT =====
+# ===== CALLBACKS =====
 def on_connect(client, userdata, flags, rc):
     print("Connected with result code", rc)
     client.subscribe(TOPIC)
@@ -47,7 +45,7 @@ def on_message(client, userdata, msg):
     except Exception as e:
         print("Error parsing message:", e)
 
-# ===== HELPERS =====
+# ===== ARCHIVE FUNCTION =====
 def archive_session_to_csv(start_time, end_time):
     if not start_time or not end_time:
         return None
@@ -89,6 +87,7 @@ def archive_session_to_csv(start_time, end_time):
     finally:
         db.close()
 
+# ===== STATUS LOG HELPERS =====
 def log_status(status: str):
     db = SessionLocal()
     try:
@@ -126,6 +125,7 @@ def handle_chamber_off():
     log_status("OFF")
     session_start_time = None
 
+# ===== STARTUP CHECK =====
 def startup_check():
     global chamber_on, session_start_time
     db = SessionLocal()
@@ -134,7 +134,7 @@ def startup_check():
         now = datetime.now(timezone.utc).astimezone(WIB)
 
         if last is None:
-            print("ℹ️ Startup: no previous log → start keep-alive")
+            print("ℹ️ Startup: no previous log found → start keep-alive")
             handle_chamber_off()
             return
 
@@ -161,88 +161,66 @@ def startup_check():
     finally:
         db.close()
 
-# ===== ASYNC TASKS =====
-async def mqtt_loop(client):
-    while True:
-        client.loop(timeout=1.0)
-        await asyncio.sleep(0.01)  # non-blocking
+# ===== MQTT CLIENT =====
+client = mqtt.Client(protocol=mqtt.MQTTv311)
+client.on_connect = on_connect
+client.on_message = on_message
+client.connect(BROKER, PORT, 60)
 
-async def fallback_checker():
-    global chamber_on, last_data_time, session_start_time
-    while True:
-        now = time.time()
-        if chamber_on:
-            db = SessionLocal()
-            try:
-                last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
-                if last_log and last_log.status == "ON":
-                    last_log_time = last_log.created_at.astimezone(WIB)
-                    age = (datetime.now(timezone.utc).astimezone(WIB) - last_log_time).total_seconds()
-                    if age > TIMEOUT_OFF:
-                        print("⚠️ Chamber OFF (fallback DB timeout)")
-                        archive_session_to_csv(session_start_time, datetime.now(timezone.utc).astimezone(WIB))
-                        handle_chamber_off()
-            finally:
-                db.close()
+# jalankan startup check sebelum loop
+startup_check()
 
-            if last_data_time and (now - last_data_time > TIMEOUT_OFF):
-                print("⚠️ Chamber OFF - timeout exceeded")
-                archive_session_to_csv(session_start_time, datetime.now(timezone.utc).astimezone(WIB))
-                handle_chamber_off()
-        await asyncio.sleep(1)  # cek tiap detik
+# ===== MAIN LOOP =====
+while True:
+    client.loop(timeout=1.0)
+    now = time.time()
 
-async def db_logger():
-    global last_write_time
-    while True:
-        now = time.time()
-        if chamber_on and latest_data and now - last_write_time >= LOG_INTERVAL:
-            db = SessionLocal()
-            try:
-                dt = datetime.now(timezone.utc).astimezone(WIB)
-                log = ChamberLog(
-                    tanggal=dt.strftime("%Y-%m-%d"),
-                    waktu=dt.strftime("%H:%M:%S"),
-                    temperature1=latest_data.get("temperature1"),
-                    temperature2=latest_data.get("temperature2"),
-                    humidity1=latest_data.get("humidity1"),
-                    humidity2=latest_data.get("humidity2"),
-                    status="ON",
-                    created_at=dt
-                )
-                db.add(log)
-                db.commit()
-                print(f"📝 Logged at {dt.strftime('%H:%M:%S')} WIB | "
-                      f"H1={log.humidity1}, T1={log.temperature1}, "
-                      f"H2={log.humidity2}, T2={log.temperature2}")
-            finally:
-                db.close()
-            last_write_time = now
-        await asyncio.sleep(1)
+    # Chamber baru ON
+    if new_data_received and not chamber_on:
+        new_data_received = False
+        handle_chamber_on()
 
-async def chamber_monitor():
-    global new_data_received
-    while True:
-        if new_data_received and not chamber_on:
-            new_data_received = False
-            handle_chamber_on()
-        await asyncio.sleep(0.5)
+    # Chamber mati: fallback timeout
+    if chamber_on:
+        # fallback DB check jika MQTT tidak mengirim data
+        db = SessionLocal()
+        try:
+            last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
+            if last_log and last_log.status == "ON":
+                last_log_time = last_log.created_at.astimezone(WIB)
+                age = (datetime.now(timezone.utc).astimezone(WIB) - last_log_time).total_seconds()
+                if age > TIMEOUT_OFF:
+                    print("⚠️ Chamber OFF (fallback DB timeout)")
+                    archive_session_to_csv(session_start_time, datetime.now(timezone.utc).astimezone(WIB))
+                    handle_chamber_off()
+        finally:
+            db.close()
+        # jika MQTT masih aktif, cek last_data_time
+        if last_data_time and (now - last_data_time > TIMEOUT_OFF):
+            print("⚠️ Chamber OFF - timeout exceeded")
+            archive_session_to_csv(session_start_time, datetime.now(timezone.utc).astimezone(WIB))
+            handle_chamber_off()
 
-# ===== MAIN =====
-def main():
-    client = mqtt.Client(protocol=mqtt.MQTTv311)
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.connect(BROKER, PORT, 60)
-
-    startup_check()
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(mqtt_loop(client))
-    loop.create_task(fallback_checker())
-    loop.create_task(db_logger())
-    loop.create_task(chamber_monitor())
-
-    loop.run_forever()
-
-if __name__ == "__main__":
-    main()
+    # Simpan data ke DB tiap LOG_INTERVAL
+    if chamber_on and latest_data and now - last_write_time >= LOG_INTERVAL:
+        db = SessionLocal()
+        try:
+            dt = datetime.now(timezone.utc).astimezone(WIB)
+            log = ChamberLog(
+                tanggal=dt.strftime("%Y-%m-%d"),
+                waktu=dt.strftime("%H:%M:%S"),
+                temperature1=latest_data.get("temperature1"),
+                temperature2=latest_data.get("temperature2"),
+                humidity1=latest_data.get("humidity1"),
+                humidity2=latest_data.get("humidity2"),
+                status="ON",
+                created_at=dt
+            )
+            db.add(log)
+            db.commit()
+            print(f"📝 Logged at {dt.strftime('%H:%M:%S')} WIB | "
+                  f"H1={log.humidity1}, T1={log.temperature1}, "
+                  f"H2={log.humidity2}, T2={log.temperature2}")
+        finally:
+            db.close()
+        last_write_time = now
