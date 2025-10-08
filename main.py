@@ -9,8 +9,6 @@ from database import SessionLocal, engine, Base, get_db
 from models import ChamberLog
 from datetime import datetime
 from sqlalchemy.orm import Session
-import uvicorn
-from mqtt_logger import main as mqtt_main_async  # versi async
 
 # Buat tabel database
 Base.metadata.create_all(bind=engine)
@@ -93,9 +91,6 @@ def _get_last_log():
 # ===== STARTUP EVENT =====
 @app.on_event("startup")
 async def on_startup():
-	# start mqtt logger async task di background
-    loop = asyncio.get_event_loop()
-    loop.create_task(mqtt_main_async())
     last = _get_last_log()
     now = datetime.now()
     STARTUP_OFF_THRESHOLD = int(os.environ.get("STARTUP_OFF_THRESHOLD", 180))
@@ -139,21 +134,21 @@ def root():
 
 @app.get("/status")
 def status(db: Session = Depends(get_db)):
-    last_log = db.query(ChamberLog).order_by(ChamberLog.id.desc()).first()
-    if not last_log:
-        return {"status": "OFF", "last_entry": None}
-
-    return {
-        "status": last_log.status,
-        "last_entry": {
-            "id": last_log.id,
-            "timestamp": last_log.created_at.isoformat() if last_log.created_at else None,
-            "temperature1": last_log.temperature1,
-            "temperature2": last_log.temperature2,
-            "humidity1": last_log.humidity1,
-            "humidity2": last_log.humidity2,
+    last_log = db.query(ChamberLog).order_by(ChamberLog.created_at.desc()).first()
+    if last_log:
+        return {
+            "status": last_log.status,
+            "last_entry": {
+                "id": last_log.id,
+                "timestamp": last_log.created_at.isoformat() if last_log.created_at else None,
+                "temperature1": last_log.temperature1,
+                "temperature2": last_log.temperature2,
+                "humidity1": last_log.humidity1,
+                "humidity2": last_log.humidity2,
+            }
         }
-    }
+    return {"status": "OFF", "last_entry": None}
+
 
 @app.get("/archives")
 def list_archives(request: Request):
@@ -196,12 +191,6 @@ def get_logs(db: Session = Depends(get_db)):
         }
         for log in logs
     ]
-
-
-
-
-
-
 
 
 
